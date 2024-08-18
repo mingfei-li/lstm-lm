@@ -147,7 +147,7 @@ def train():
 
         model.eval()
         validate(config, model, criterion, logger, step)
-        inference(config, model, 'San Francisco is', 1.0, logger, step)
+        generate(config, model, 'San Francisco is', 1.0, logger, step)
         torch.save(
             model.state_dict(),
             f'{config.model_dir}/checkpoint-{epoch}.pt',
@@ -180,7 +180,7 @@ def validate(config, model, criterion, logger, step):
     logger.add_scalar('perplexity', perplexity, step)
     logger.flush()
 
-def inference(config, model, prompt, temperature, logger=None, step=None):
+def generate(config, model, prompt, temperature, logger=None, step=None):
     tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
     token_ids = tokenizer.encode(prompt)
     assert token_ids[-1] == tokenizer.sep_token_id
@@ -190,9 +190,9 @@ def inference(config, model, prompt, temperature, logger=None, step=None):
     model.eval()
     with torch.no_grad():
         output_ids, hc_states = model(input_ids)
-    while True:
+    while len(token_ids) < config.max_length:
         logits = output_ids[-1] / temperature
-        next_token = Categorical(torch.exp(logits)).sample()
+        next_token = Categorical(logits=logits).sample()
         token_ids.append(next_token)
         if next_token == tokenizer.sep_token_id:
             break
@@ -203,13 +203,17 @@ def inference(config, model, prompt, temperature, logger=None, step=None):
             )
     result = tokenizer.decode(token_ids)
     if logger is not None:
-        logger.add_text('inference', result, step)
+        logger.add_text(f'generated_text_temperature={temperature}', result, step)
     else:
         print(tokenizer.decode(token_ids))
+
+def inference():
+    config = Config()
+    model = RNN(config)
+    model.load_state_dict(torch.load('model.pt', map_location=config.device))
+    model.to(config.device)
+    generate(config, model, 'San Francisco is', 0.8)
         
 if __name__ == '__main__':
     train()
-    # config = Config()
-    # model = RNN(config)
-    # model.load_state_dict(torch.load(f'{config.model_dir}/model.pt'))
-    # inference(config, model, 'San Francisco 49ers are one of', 1.0)
+    # inference()
