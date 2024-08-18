@@ -6,6 +6,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from transformers import AutoTokenizer
 from statistics import mean
+import multiprocessing
 import os
 import torch
 import torch.nn as nn
@@ -13,14 +14,15 @@ import torch.nn as nn
 class Config():
     def __init__(self):
         self.exp_name = 'wikitext-103-raw-v1'
-        self.exp_id = '4'
+        self.exp_id = '1'
         self.num_epochs = 10
-        self.batch_size = 10
-        self.num_workers = 0
+        self.batch_size = 128
+        self.num_workers = multiprocessing.cpu_count() - 1
         self.max_length = 512
-        self.vocab_size = AutoTokenizer.from_pretrained('bert-base-uncased').vocab_size
-        self.embedding_dim = 100
-        self.hidden_dim = 100
+        self.vocab_size = 30522 # = AutoTokenizer.from_pretrained('bert-base-uncased').vocab_size
+        self.pad_token_id = 0 # = AutoTokenizer.from_pretrained('bert-base-uncased').pad_token_id
+        self.embedding_dim = 1024
+        self.hidden_dim = 1024
         self.dropout_rate = 0.5
         self.num_layers = 2
         self.tie_weights = True
@@ -100,9 +102,8 @@ def train():
         collate_fn=partial(collate, config.max_length)
     )
 
-    model = RNN(config)
-    tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
-    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+    model = RNN(config).to(config.device)
+    criterion = nn.CrossEntropyLoss(ignore_index=config.pad_token_id)
     optimizer = torch.optim.Adam(
         params=model.parameters(),
         lr=config.lr,
@@ -118,6 +119,7 @@ def train():
     for epoch in tqdm(range(config.num_epochs), 'Epoch: '):
         model.train()
         for batch, token_ids in enumerate(tqdm(dl_train, 'Batch: ')):
+            token_ids = token_ids.to(config.device)
             input_ids = token_ids[:,:-1]
             targets = token_ids[:,1:]
 
@@ -163,6 +165,7 @@ def validate(config, model, criterion, logger, step):
 
     perplexity = []
     for batch, token_ids in enumerate(tqdm(dl_val, 'Val Batch: ')):
+        token_ids = token_ids.to(config.device)
         input_ids = token_ids[:,:-1]
         targets = token_ids[:,1:]
 
@@ -182,7 +185,7 @@ def inference(config, model, prompt, temperature, logger=None, step=None):
     token_ids = tokenizer.encode(prompt)
     assert token_ids[-1] == tokenizer.sep_token_id
     token_ids = token_ids[:-1]
-    input_ids = torch.tensor(token_ids)
+    input_ids = torch.tensor(token_ids, device=config.device)
 
     model.eval()
     with torch.no_grad():
@@ -195,7 +198,7 @@ def inference(config, model, prompt, temperature, logger=None, step=None):
             break
         with torch.no_grad():
             output_ids, hc_states = model(
-                torch.tensor([next_token]),
+                torch.tensor([next_token], device=config.device),
                 hc_states,
             )
     result = tokenizer.decode(token_ids)
