@@ -1,5 +1,6 @@
 from datasets import load_dataset
 from functools import partial
+from torch.distributions import Categorical
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -11,8 +12,8 @@ import torch.nn as nn
 
 class Config():
     def __init__(self):
-        self.exp_name = 'wikitext-2-raw-v1'
-        self.exp_id = '2'
+        self.exp_name = 'wikitext-103-raw-v1'
+        self.exp_id = '4'
         self.num_epochs = 10
         self.batch_size = 10
         self.num_workers = 0
@@ -65,12 +66,15 @@ class RNN(nn.Module):
         if config.tie_weights:
             self.fc.weight = self.embedding.weight
     
-    def forward(self, x):
+    def forward(self, x, hc=None):
         x = self.dropout(self.embedding(x))
-        x, _ = self.lstm(x)
+        if hc is not None:
+            x, hc = self.lstm(x, hc)
+        else:
+            x, hc = self.lstm(x)
         x = self.dropout(x)
         x = self.fc(x)
-        return x
+        return x, hc
 
 def collate(max_length, batch):
     tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
@@ -87,7 +91,7 @@ def collate(max_length, batch):
 def train():
     config = Config()
 
-    ds_train = load_dataset('Salesforce/wikitext', 'wikitext-2-raw-v1')['train']
+    ds_train = load_dataset('Salesforce/wikitext', config.exp_name)['train']
     dl_train = DataLoader(
         dataset=ds_train,
         batch_size=config.batch_size,
@@ -117,7 +121,7 @@ def train():
             input_ids = token_ids[:,:-1]
             targets = token_ids[:,1:]
 
-            logits = model(input_ids)
+            logits, _ = model(input_ids)
             logits = logits.reshape(-1, logits.size(-1))
             targets = targets.reshape(-1)
             loss = criterion(logits, targets)
@@ -141,13 +145,14 @@ def train():
 
         model.eval()
         validate(config, model, criterion, logger, step)
+        inference(config, model, 'San Francisco is', 1.0, logger, step)
         torch.save(
             model.state_dict(),
             f'{config.model_dir}/checkpoint-{epoch}.pt',
         )
 
 def validate(config, model, criterion, logger, step):
-    ds_val = load_dataset('Salesforce/wikitext', 'wikitext-2-raw-v1')['validation']
+    ds_val = load_dataset('Salesforce/wikitext', config.exp_name)['validation']
     dl_val = DataLoader(
         dataset=ds_val,
         batch_size=config.batch_size,
@@ -162,7 +167,7 @@ def validate(config, model, criterion, logger, step):
         targets = token_ids[:,1:]
 
         with torch.no_grad():
-            logits = model(input_ids)
+            logits, _ = model(input_ids)
         logits = logits.reshape(-1, logits.size(-1))
         targets = targets.reshape(-1)
         loss = criterion(logits, targets)
@@ -172,5 +177,36 @@ def validate(config, model, criterion, logger, step):
     logger.add_scalar('perplexity', perplexity, step)
     logger.flush()
 
+def inference(config, model, prompt, temperature, logger=None, step=None):
+    tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
+    token_ids = tokenizer.encode(prompt)
+    assert token_ids[-1] == tokenizer.sep_token_id
+    token_ids = token_ids[:-1]
+    input_ids = torch.tensor(token_ids)
+
+    model.eval()
+    with torch.no_grad():
+        output_ids, hc_states = model(input_ids)
+    while True:
+        logits = output_ids[-1] / temperature
+        next_token = Categorical(torch.exp(logits)).sample()
+        token_ids.append(next_token)
+        if next_token == tokenizer.sep_token_id:
+            break
+        with torch.no_grad():
+            output_ids, hc_states = model(
+                torch.tensor([next_token]),
+                hc_states,
+            )
+    result = tokenizer.decode(token_ids)
+    if logger is not None:
+        logger.add_text('inference', result, step)
+    else:
+        print(tokenizer.decode(token_ids))
+        
 if __name__ == '__main__':
     train()
+    # config = Config()
+    # model = RNN(config)
+    # model.load_state_dict(torch.load(f'{config.model_dir}/model.pt'))
+    # inference(config, model, 'San Francisco 49ers are one of', 1.0)
