@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from transformers import AutoTokenizer
+from statistics import mean
 import os
 import torch
 import torch.nn as nn
@@ -11,9 +12,9 @@ import torch.nn as nn
 class Config():
     def __init__(self):
         self.exp_name = 'wikitext-2-raw-v1'
-        self.exp_id = '1'
+        self.exp_id = '2'
         self.num_epochs = 10
-        self.batch_size = 200
+        self.batch_size = 10
         self.num_workers = 0
         self.max_length = 512
         self.vocab_size = AutoTokenizer.from_pretrained('bert-base-uncased').vocab_size
@@ -111,46 +112,65 @@ def train():
     logger = SummaryWriter(log_dir=config.log_dir)
     step = 0
     for epoch in tqdm(range(config.num_epochs), 'Epoch: '):
+        model.train()
         for batch, token_ids in enumerate(tqdm(dl_train, 'Batch: ')):
             input_ids = token_ids[:,:-1]
             targets = token_ids[:,1:]
 
-            # print(f'batch {i}')
-            # print(f'input_ids = {tokenizer.decode(input_ids[0])}')
-            # print(f'targets = {tokenizer.decode(targets[0])}')
-            # print(f'masks = {masks[0]}')
-            # for j in range(input_ids.shape[1]):
-            #     if tokenizer.decode(input_ids[0][j]) == '[SEP]':
-            #         print(f'input_ids [SEP] index: {j}')
-            #         print(f'mask[j] = {masks[0][j]}')
-            #         print(f'mask[j-1] = {masks[0][j-1]}')
-            #         print(f'target[j] = {tokenizer.decode(targets[0][j])}')
-            #         print(f'target[j-1] = {tokenizer.decode(targets[0][j-1])}')
-    
-            model.train()
             logits = model(input_ids)
             logits = logits.reshape(-1, logits.size(-1))
             targets = targets.reshape(-1)
-            # print(f'logits={logits.shape}')
-            # print(f'targets={targets.shape}')
-
             loss = criterion(logits, targets)
-            print(f'Epoch {epoch}, batch {batch}: loss={loss}')
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             lr_scheduler.step()
 
-            step += 1
+            grad_norm = 0.0
+            for param in model.parameters():
+                param_norm = param.grad.data.norm(2)
+                grad_norm += param_norm.item() ** 2
+            grad_norm = grad_norm ** 0.5
+
+            step += config.batch_size
             logger.add_scalar('training_loss', loss.item(), step)
+            logger.add_scalar('grad_norm', grad_norm, step)
             logger.add_scalar('lr', lr_scheduler.get_last_lr()[0], step)
             logger.flush()
 
         model.eval()
+        validate(config, model, criterion, logger, step)
         torch.save(
-            model.load_state_dict(),
+            model.state_dict(),
             f'{config.model_dir}/checkpoint-{epoch}.pt',
         )
+
+def validate(config, model, criterion, logger, step):
+    ds_val = load_dataset('Salesforce/wikitext', 'wikitext-2-raw-v1')['validation']
+    dl_val = DataLoader(
+        dataset=ds_val,
+        batch_size=config.batch_size,
+        shuffle=True,
+        num_workers=config.num_workers,
+        collate_fn=partial(collate, config.max_length)
+    )
+
+    perplexity = []
+    for batch, token_ids in enumerate(tqdm(dl_val, 'Val Batch: ')):
+        input_ids = token_ids[:,:-1]
+        targets = token_ids[:,1:]
+
+        with torch.no_grad():
+            logits = model(input_ids)
+        logits = logits.reshape(-1, logits.size(-1))
+        targets = targets.reshape(-1)
+        loss = criterion(logits, targets)
+        perplexity.append(torch.exp(loss).item())
+        
+    perplexity = mean(perplexity)
+    logger.add_scalar('perplexity', perplexity, step)
+    logger.flush()
 
 if __name__ == '__main__':
     train()
