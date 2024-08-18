@@ -16,13 +16,13 @@ class Config():
         self.exp_name = 'wikitext-103-raw-v1'
         self.exp_id = '1'
         self.num_epochs = 10
-        self.batch_size = 128
+        self.batch_size = 50
         self.num_workers = multiprocessing.cpu_count() - 1
         self.max_length = 512
         self.vocab_size = 30522 # = AutoTokenizer.from_pretrained('bert-base-uncased').vocab_size
         self.pad_token_id = 0 # = AutoTokenizer.from_pretrained('bert-base-uncased').pad_token_id
-        self.embedding_dim = 1024
-        self.hidden_dim = 1024
+        self.embedding_dim = 512
+        self.hidden_dim = 512
         self.dropout_rate = 0.5
         self.num_layers = 2
         self.tie_weights = True
