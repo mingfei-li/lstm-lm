@@ -10,11 +10,12 @@ import multiprocessing
 import os
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class Config():
     def __init__(self):
-        self.exp_name = 'wikitext-103-raw-v1'
-        self.exp_id = '3'
+        self.exp_name = 'wikitext-2-raw-v1'
+        self.exp_id = '6'
         self.num_epochs = 20
         self.batch_size = 50
         self.num_workers = multiprocessing.cpu_count() - 1
@@ -28,7 +29,7 @@ class Config():
         self.tie_weights = True
         self.lr = 1e-3
         self.lr_end_factor = 1e-3
-        self.grad_clip = 0.25
+        self.grad_clip = None
 
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
@@ -79,6 +80,66 @@ class RNN(nn.Module):
         x = self.fc(x)
         return x, hc
 
+class LSTM(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.embedding = nn.Embedding(
+            num_embeddings=config.vocab_size,
+            embedding_dim=config.embedding_dim,
+        )
+        self.input_gate = nn.Linear(
+            in_features=2*config.hidden_dim,
+            out_features=config.hidden_dim,
+        )
+        self.forget_gate = nn.Linear(
+            in_features=2*config.hidden_dim,
+            out_features=config.hidden_dim,
+        )
+        self.output_gate = nn.Linear(
+            in_features=2*config.hidden_dim,
+            out_features=config.hidden_dim,
+        )
+        self.cell_gen = nn.Linear(
+            in_features=2*config.hidden_dim,
+            out_features=config.hidden_dim,
+        )
+        self.fc = nn.Linear(
+            in_features=config.hidden_dim,
+            out_features=config.vocab_size,
+        )
+        self.dropout = nn.Dropout(p=config.dropout_rate)
+        self.device = config.device
+        if config.tie_weights:
+            self.fc.weight = self.embedding.weight
+    
+    def forward(self, x, hc=None):
+        x = x.transpose(0, 1)
+        x = self.dropout(self.embedding(x))
+        sequence_length, batch_size, hidden_dim = x.shape
+        if hc is None:
+            h = torch.zeros(batch_size, hidden_dim, device=self.device)
+            c = torch.zeros(batch_size, hidden_dim, device=self.device)
+        else:
+            h, c = hc
+
+        y = []
+        for t in range(sequence_length):
+            hx = torch.cat((h, x[t]), dim=1)
+            i = F.sigmoid(self.input_gate(hx))
+            f = F.sigmoid(self.forget_gate(hx))
+            o = F.sigmoid(self.output_gate(hx))
+            cc = F.tanh(self.cell_gen(hx))
+            c = f * c + i * cc
+            h = o * F.tanh(c)
+            hc = (h, c)
+            y.append(h)
+        
+        x = torch.stack(y)
+        x = self.dropout(x)
+        x = self.fc(x)
+        x = x.transpose(0, 1)
+        return x, hc
+
 def collate(max_length, batch):
     tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
     batch = [doc['text'] for doc in batch]
@@ -103,7 +164,7 @@ def train():
         collate_fn=partial(collate, config.max_length)
     )
 
-    model = RNN(config).to(config.device)
+    model = LSTM(config).to(config.device)
     criterion = nn.CrossEntropyLoss(ignore_index=config.pad_token_id)
     optimizer = torch.optim.Adam(
         params=model.parameters(),
@@ -131,7 +192,8 @@ def train():
 
             optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+            if config.grad_clip is not None:
+                nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
             optimizer.step()
             lr_scheduler.step()
 
@@ -211,7 +273,7 @@ def generate(config, model, prompt, temperature, logger=None, step=None):
 
 def inference():
     config = Config()
-    model = RNN(config)
+    model = LSTM(config)
     model.load_state_dict(torch.load('model.pt', map_location=config.device))
     model.to(config.device)
     generate(config, model, 'San Francisco is', 0.8)
