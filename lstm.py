@@ -14,8 +14,8 @@ import torch.nn as nn
 class Config():
     def __init__(self):
         self.exp_name = 'wikitext-103-raw-v1'
-        self.exp_id = '2'
-        self.num_epochs = 100
+        self.exp_id = '3'
+        self.num_epochs = 20
         self.batch_size = 50
         self.num_workers = multiprocessing.cpu_count() - 1
         self.max_length = 512
@@ -28,6 +28,7 @@ class Config():
         self.tie_weights = True
         self.lr = 1e-3
         self.lr_end_factor = 1e-3
+        self.grad_clip = 0.25
 
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
@@ -130,6 +131,7 @@ def train():
 
             optimizer.zero_grad()
             loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
             optimizer.step()
             lr_scheduler.step()
 
