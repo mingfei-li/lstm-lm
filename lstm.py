@@ -255,14 +255,14 @@ def generate(config, model, prompt, temperature, logger=None, step=None):
     with torch.no_grad():
         output_ids, hc_states = model(input_ids)
     while len(token_ids) < config.max_length:
-        logits = output_ids[-1] / temperature
+        logits = output_ids[0, -1] / temperature
         next_token = Categorical(logits=logits).sample()
         token_ids.append(next_token)
         if next_token == tokenizer.sep_token_id:
             break
         with torch.no_grad():
             output_ids, hc_states = model(
-                torch.tensor([next_token], device=config.device),
+                torch.tensor([[next_token]], device=config.device),
                 hc_states,
             )
     result = tokenizer.decode(token_ids)
