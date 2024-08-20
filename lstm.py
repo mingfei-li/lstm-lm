@@ -14,9 +14,9 @@ import torch.nn.functional as F
 
 class Config():
     def __init__(self):
-        self.exp_name = 'wikitext-2-raw-v1'
-        self.exp_id = '6'
-        self.num_epochs = 20
+        self.exp_name = 'wikitext-103-raw-v1'
+        self.exp_id = '4'
+        self.num_epochs = 100
         self.batch_size = 50
         self.num_workers = multiprocessing.cpu_count() - 1
         self.max_length = 512
@@ -211,7 +211,7 @@ def train():
 
         model.eval()
         validate(config, model, criterion, logger, step)
-        generate(config, model, 'San Francisco is', 1.0, logger, step)
+        generate(config, model, 'Think about', 1.0, logger, step)
         torch.save(
             model.state_dict(),
             f'{config.model_dir}/checkpoint-{epoch}.pt',
@@ -249,7 +249,7 @@ def generate(config, model, prompt, temperature, logger=None, step=None):
     token_ids = tokenizer.encode(prompt)
     assert token_ids[-1] == tokenizer.sep_token_id
     token_ids = token_ids[:-1]
-    input_ids = torch.tensor(token_ids, device=config.device)
+    input_ids = torch.tensor(token_ids, device=config.device).unsqueeze(dim=0)
 
     model.eval()
     with torch.no_grad():
