@@ -15,7 +15,7 @@ import torch.nn.functional as F
 class Config():
     def __init__(self):
         self.exp_name = 'wikitext-103-raw-v1'
-        self.exp_id = '4'
+        self.exp_id = '5'
         self.num_epochs = 100
         self.batch_size = 50
         self.num_workers = multiprocessing.cpu_count() - 1
@@ -29,7 +29,7 @@ class Config():
         self.tie_weights = True
         self.lr = 1e-3
         self.lr_end_factor = 1e-3
-        self.grad_clip = None
+        self.grad_clip = 0.5
 
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
@@ -164,7 +164,7 @@ def train():
         collate_fn=partial(collate, config.max_length)
     )
 
-    model = LSTM(config).to(config.device)
+    model = RNN(config).to(config.device)
     criterion = nn.CrossEntropyLoss(ignore_index=config.pad_token_id)
     optimizer = torch.optim.Adam(
         params=model.parameters(),
@@ -273,7 +273,7 @@ def generate(config, model, prompt, temperature, logger=None, step=None):
 
 def inference():
     config = Config()
-    model = LSTM(config)
+    model = RNN(config)
     model.load_state_dict(torch.load('model.pt', map_location=config.device))
     model.to(config.device)
     generate(config, model, 'San Francisco is', 0.8)
